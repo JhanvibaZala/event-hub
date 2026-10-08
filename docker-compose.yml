@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: eventhub-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USERNAME:-janvi}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-your_password}
+      POSTGRES_DB: ${DB_DATABASE:-eventhub_db}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - eventhub_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-janvi} -d ${DB_DATABASE:-eventhub_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: eventhub-rabbitmq
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    volumes:
+      - eventhub_rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  eventhub_pgdata:
+  eventhub_rabbitmq_data:
