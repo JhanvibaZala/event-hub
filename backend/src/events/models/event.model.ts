@@ -34,6 +34,22 @@ export type EventStatus = 'DRAFT' | 'PUBLISHED' | 'CANCELLED' | 'COMPLETED';
       name: 'idx_events_created_by_id',
       fields: ['created_by_id'],
     },
+    {
+      name: 'idx_events_price',
+      fields: ['price'],
+    },
+    {
+      name: 'idx_events_start_date_id',
+      fields: ['start_date', 'id'],
+    },
+    {
+      name: 'idx_events_status_price',
+      fields: ['status', 'price'],
+    },
+    {
+      name: 'idx_events_status_created_at_id',
+      fields: ['status', 'created_at', 'id'],
+    },
   ],
 })
 export class Event extends Model {

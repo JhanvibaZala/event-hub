@@ -5,11 +5,13 @@ import { Event } from './models/event.model';
 import { Category } from '../categories/models/category.model';
 import { EventQueryDto } from './dto/event-query.dto';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
+import { encodeCursor } from '../common/dto/keyset-pagination.dto';
 
 describe('EventsService', () => {
   let service: EventsService;
   let eventModel: {
-    findAndCountAll: jest.Mock;
+    findAll: jest.Mock;
+    count: jest.Mock;
     findOne: jest.Mock;
     findByPk: jest.Mock;
     create: jest.Mock;
@@ -19,9 +21,15 @@ describe('EventsService', () => {
     findByPk: jest.Mock;
   };
 
+  const createMockEvent = (data: Partial<Event>): any => ({
+    ...data,
+    get: (key: string) => (data as any)[key],
+  });
+
   beforeEach(async () => {
     eventModel = {
-      findAndCountAll: jest.fn(),
+      findAll: jest.fn(),
+      count: jest.fn(),
       findOne: jest.fn(),
       findByPk: jest.fn(),
       create: jest.fn(),
@@ -48,46 +56,183 @@ describe('EventsService', () => {
     service = module.get<EventsService>(EventsService);
   });
 
-  describe('findAll', () => {
-    it('should return paginated events with metadata', async () => {
-      const mockEvents = [
-        { id: 'ev-1', title: 'Tech Summit 2026', status: 'PUBLISHED' },
-      ];
-      eventModel.findAndCountAll.mockResolvedValue({
-        count: 1,
-        rows: mockEvents,
+  describe('findAll (Keyset Pagination, Multi-Sort & Advanced Filters)', () => {
+    it('should return paginated events with keyset metadata and no OFFSET', async () => {
+      const mockEvent = createMockEvent({
+        id: 'ev-1',
+        title: 'Tech Summit 2026',
+        startDate: new Date('2026-11-20T09:00:00Z'),
+        price: 100,
+        status: 'PUBLISHED',
       });
 
-      const query = Object.assign(new EventQueryDto(), { page: 1, limit: 10 });
+      eventModel.findAll.mockResolvedValue([mockEvent]);
+      eventModel.count.mockResolvedValue(1);
+
+      const query = Object.assign(new EventQueryDto(), { limit: 10 });
       const result = await service.findAll(query);
 
       expect(result.items).toHaveLength(1);
-      expect(result.meta.total).toBe(1);
-      expect(result.meta.page).toBe(1);
       expect(result.meta.limit).toBe(10);
-      expect(result.meta.totalPages).toBe(1);
+      expect(result.meta.total).toBe(1);
+      expect(result.meta.hasNextPage).toBe(false);
+      expect(result.meta.nextCursor).toBeNull();
+      expect(eventModel.findAll).toHaveBeenCalledWith(
+        expect.objectContaining({
+          limit: 11, // limit + 1 for keyset detection
+        }),
+      );
     });
 
-    it('should apply search terms and category filter', async () => {
-      eventModel.findAndCountAll.mockResolvedValue({
-        count: 0,
-        rows: [],
-      });
+    it('should generate nextCursor when rows exceed limit', async () => {
+      const mockEvents = [
+        createMockEvent({
+          id: 'ev-1',
+          startDate: new Date('2026-11-20T09:00:00Z'),
+          price: 50,
+        }),
+        createMockEvent({
+          id: 'ev-2',
+          startDate: new Date('2026-11-21T09:00:00Z'),
+          price: 75,
+        }),
+      ];
+
+      // Request limit: 1, returns 2 rows -> hasNextPage = true
+      eventModel.findAll.mockResolvedValue(mockEvents);
+      eventModel.count.mockResolvedValue(2);
 
       const query = Object.assign(new EventQueryDto(), {
-        search: 'AI',
-        categoryId: 'cat-123',
-        page: 1,
-        limit: 10,
+        limit: 1,
+        sort: 'startDate:ASC',
       });
+      const result = await service.findAll(query);
+
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0].id).toBe('ev-1');
+      expect(result.meta.hasNextPage).toBe(true);
+      expect(result.meta.nextCursor).toBeTruthy();
+    });
+
+    it('should apply keyset cursor conditions when cursor is provided', async () => {
+      const cursor = encodeCursor(['2026-11-20T09:00:00.000Z', 'ev-1']);
+
+      eventModel.findAll.mockResolvedValue([]);
+      eventModel.count.mockResolvedValue(0);
+
+      const query = Object.assign(new EventQueryDto(), {
+        limit: 5,
+        sort: 'startDate:ASC',
+        cursor,
+      });
+
       await service.findAll(query);
 
-      expect(eventModel.findAndCountAll).toHaveBeenCalledWith(
+      expect(eventModel.findAll).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({
-            categoryId: 'cat-123',
-          }),
+          where: expect.any(Object),
         }),
+      );
+    });
+
+    it('should support multi-sorting with deterministic ID tie-breaker', async () => {
+      eventModel.findAll.mockResolvedValue([]);
+      eventModel.count.mockResolvedValue(0);
+
+      const query = Object.assign(new EventQueryDto(), {
+        sort: 'price:DESC,startDate:ASC',
+      });
+
+      const result = await service.findAll(query);
+
+      expect(result.meta.activeSort).toEqual([
+        { field: 'price', direction: 'DESC' },
+        { field: 'startDate', direction: 'ASC' },
+        { field: 'id', direction: 'DESC' }, // Tie-breaker matches primary direction
+      ]);
+    });
+
+    it('should throw BadRequestException when sorting by disallowed field', async () => {
+      const query = Object.assign(new EventQueryDto(), {
+        sort: 'password:ASC',
+      });
+
+      await expect(service.findAll(query)).rejects.toThrow(BadRequestException);
+    });
+
+    it('should apply advanced multi-filter rules with AND/OR logic', async () => {
+      eventModel.findAll.mockResolvedValue([]);
+      eventModel.count.mockResolvedValue(0);
+
+      const filters = {
+        logic: 'AND',
+        rules: [
+          { field: 'price', operator: 'lte', value: 100 },
+          { field: 'isOnline', operator: 'equals', value: true },
+        ],
+        groups: [
+          {
+            logic: 'OR',
+            rules: [
+              { field: 'location', operator: 'contains', value: 'San Francisco' },
+              { field: 'capacity', operator: 'gte', value: 50 },
+            ],
+          },
+        ],
+      };
+
+      const query = Object.assign(new EventQueryDto(), {
+        filters: JSON.stringify(filters),
+      });
+
+      await service.findAll(query);
+
+      expect(eventModel.findAll).toHaveBeenCalled();
+    });
+
+    it('should support between operator for numeric and date fields', async () => {
+      eventModel.findAll.mockResolvedValue([]);
+      eventModel.count.mockResolvedValue(0);
+
+      const filters = {
+        logic: 'AND',
+        rules: [
+          { field: 'price', operator: 'between', value: [10, 200] },
+          {
+            field: 'startDate',
+            operator: 'between',
+            value: ['2026-11-01T00:00:00Z', '2026-12-01T00:00:00Z'],
+          },
+        ],
+      };
+
+      const query = Object.assign(new EventQueryDto(), {
+        filters: JSON.stringify(filters),
+      });
+
+      await service.findAll(query);
+      expect(eventModel.findAll).toHaveBeenCalled();
+    });
+
+    it('should throw BadRequestException for invalid filter field or operator', async () => {
+      const invalidFieldQuery = Object.assign(new EventQueryDto(), {
+        filters: JSON.stringify({
+          rules: [{ field: 'unsupportedField', operator: 'equals', value: 'test' }],
+        }),
+      });
+
+      await expect(service.findAll(invalidFieldQuery)).rejects.toThrow(
+        BadRequestException,
+      );
+
+      const invalidOpQuery = Object.assign(new EventQueryDto(), {
+        filters: JSON.stringify({
+          rules: [{ field: 'title', operator: 'gt', value: 'test' }], // gt not allowed on string
+        }),
+      });
+
+      await expect(service.findAll(invalidOpQuery)).rejects.toThrow(
+        BadRequestException,
       );
     });
   });

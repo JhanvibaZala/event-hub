@@ -1,38 +1,82 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../../../app/hooks';
 import {
   fetchEventsThunk,
   fetchCategoriesThunk,
+  setViewMode,
+  FilterGroup,
+  SortRule,
 } from '../eventsSlice';
 import { useDebounce } from '../../../hooks/useDebounce';
+import { FilterBuilder } from '../components/FilterBuilder';
+import { MultiSortControl } from '../components/MultiSortControl';
+import { ViewToggle } from '../components/ViewToggle';
+import { EventListItem } from '../components/EventListItem';
 import {
   Search,
   Calendar,
   MapPin,
   Users,
-  Tag,
   ArrowRight,
-  Filter,
-  CheckCircle,
+  Filter as FilterIcon,
+  SlidersHorizontal,
 } from 'lucide-react';
 
 export const EventsExplorePage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const dispatch = useAppDispatch();
-  const { items, meta, categories, isLoading } = useAppSelector(
+  const { items, meta, categories, isLoading, viewMode } = useAppSelector(
     (state) => state.events,
   );
 
   // Read URL query params
-  const paramPage = Number(searchParams.get('page')) || 1;
   const paramSearch = searchParams.get('search') || '';
-  const paramCategory = searchParams.get('categoryId') || '';
-  const paramSort = searchParams.get('sortBy') || 'startDate';
-  const paramOrder = searchParams.get('sortOrder') || 'ASC';
+  const paramSort = searchParams.get('sort') || 'startDate:ASC';
+  const paramCursor = searchParams.get('cursor') || '';
+  const paramPage = Number(searchParams.get('page')) || 1;
+  const paramLimit = Number(searchParams.get('limit')) || 6;
+  const urlFiltersStr = searchParams.get('filters') || '';
 
+  // Local search input
   const [searchInput, setSearchInput] = useState(paramSearch);
   const debouncedSearch = useDebounce(searchInput, 350);
+
+  // Keyset cursor history stack for navigating backwards
+  const [cursorStack, setCursorStack] = useState<string[]>([]);
+
+  // Show/hide filter builder panel toggle
+  const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(true);
+
+  // Parse filters from URL
+  const parsedFilters: FilterGroup = useMemo(() => {
+    if (!urlFiltersStr) return { logic: 'AND', rules: [], groups: [] };
+    try {
+      return JSON.parse(urlFiltersStr);
+    } catch {
+      return { logic: 'AND', rules: [], groups: [] };
+    }
+  }, [urlFiltersStr]);
+
+  // Draft filter group state for builder edits
+  const [filterDraft, setFilterDraft] = useState<FilterGroup>(parsedFilters);
+
+  // Sync draft whenever URL filters change
+  useEffect(() => {
+    setFilterDraft(parsedFilters);
+  }, [parsedFilters]);
+
+  // Parse sort rules from URL
+  const activeSortRules: SortRule[] = useMemo(() => {
+    if (!paramSort) return [{ field: 'startDate', direction: 'ASC' }];
+    return paramSort.split(',').map((seg) => {
+      const [field, dir] = seg.split(':');
+      return {
+        field: field || 'startDate',
+        direction: (dir?.toUpperCase() === 'DESC' ? 'DESC' : 'ASC') as 'ASC' | 'DESC',
+      };
+    });
+  }, [paramSort]);
 
   // Sync debounced search to URL query param
   useEffect(() => {
@@ -42,46 +86,125 @@ export const EventsExplorePage: React.FC = () => {
     } else {
       params.delete('search');
     }
+    params.delete('cursor');
     params.set('page', '1');
+    setCursorStack([]);
     setSearchParams(params, { replace: true });
   }, [debouncedSearch]);
 
-  // Fetch categories on mount
+  // Fetch categories once on mount
   useEffect(() => {
     dispatch(fetchCategoriesThunk());
   }, [dispatch]);
 
-  // Fetch events when URL params change
+  // Fetch events when query params change (viewMode change will NOT trigger this!)
   useEffect(() => {
     dispatch(
       fetchEventsThunk({
-        page: paramPage,
-        limit: 6,
-        search: paramSearch,
-        categoryId: paramCategory || undefined,
-        sortBy: paramSort,
-        sortOrder: paramOrder,
+        limit: paramLimit,
+        search: paramSearch || undefined,
+        sort: paramSort || undefined,
+        filters: urlFiltersStr || undefined,
+        cursor: paramCursor || undefined,
       }),
     );
-  }, [dispatch, paramPage, paramSearch, paramCategory, paramSort, paramOrder]);
+  }, [dispatch, paramLimit, paramSearch, paramSort, urlFiltersStr, paramCursor]);
 
-  const handleCategorySelect = (categoryId: string) => {
+  // Filter Apply Handler
+  const handleApplyFilters = () => {
     const params = new URLSearchParams(searchParams);
-    if (paramCategory === categoryId) {
-      params.delete('categoryId');
+    const cleanRules = (filterDraft.rules || []).filter(
+      (r) => r.value !== '' && r.value !== undefined && r.value !== null,
+    );
+    const cleanGroups = (filterDraft.groups || []).filter(
+      (g) => g.rules && g.rules.length > 0,
+    );
+
+    if (cleanRules.length > 0 || cleanGroups.length > 0) {
+      const cleanGroup: FilterGroup = {
+        logic: filterDraft.logic || 'AND',
+        ...(cleanRules.length > 0 ? { rules: cleanRules } : {}),
+        ...(cleanGroups.length > 0 ? { groups: cleanGroups } : {}),
+      };
+      params.set('filters', JSON.stringify(cleanGroup));
     } else {
-      params.set('categoryId', categoryId);
+      params.delete('filters');
     }
+
+    params.delete('cursor');
     params.set('page', '1');
+    setCursorStack([]);
     setSearchParams(params);
   };
 
-  const handlePageChange = (newPage: number) => {
+  // Filter Reset Handler
+  const handleResetFilters = () => {
+    const empty: FilterGroup = { logic: 'AND', rules: [], groups: [] };
+    setFilterDraft(empty);
     const params = new URLSearchParams(searchParams);
-    params.set('page', String(newPage));
+    params.delete('filters');
+    params.delete('cursor');
+    params.set('page', '1');
+    setCursorStack([]);
+    setSearchParams(params);
+  };
+
+  // Sort Change Handler
+  const handleSortChange = (newRules: SortRule[]) => {
+    const sortStr = newRules.map((r) => `${r.field}:${r.direction}`).join(',');
+    const params = new URLSearchParams(searchParams);
+    params.set('sort', sortStr);
+    params.delete('cursor');
+    params.set('page', '1');
+    setCursorStack([]);
+    setSearchParams(params);
+  };
+
+  // Keyset Next Page
+  const handleNextPage = () => {
+    if (!meta.nextCursor) return;
+    setCursorStack((prev) => [...prev, paramCursor]);
+    const params = new URLSearchParams(searchParams);
+    params.set('cursor', meta.nextCursor);
+    params.set('page', String(paramPage + 1));
     setSearchParams(params);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
+
+  // Keyset Previous Page
+  const handlePrevPage = () => {
+    if (cursorStack.length === 0) return;
+    const newStack = [...cursorStack];
+    const prevCursor = newStack.pop();
+    setCursorStack(newStack);
+
+    const params = new URLSearchParams(searchParams);
+    if (prevCursor) {
+      params.set('cursor', prevCursor);
+    } else {
+      params.delete('cursor');
+    }
+    params.set('page', String(Math.max(1, paramPage - 1)));
+    setSearchParams(params);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Page Size Limit Change
+  const handleLimitChange = (newLimit: number) => {
+    const params = new URLSearchParams(searchParams);
+    params.set('limit', String(newLimit));
+    params.delete('cursor');
+    params.set('page', '1');
+    setCursorStack([]);
+    setSearchParams(params);
+  };
+
+  // View Mode Change (Client-side state, no network fetch!)
+  const handleViewModeChange = (mode: 'grid' | 'list') => {
+    dispatch(setViewMode(mode));
+  };
+
+  const isFilterActive = Boolean(urlFiltersStr);
 
   return (
     <div>
@@ -124,7 +247,7 @@ export const EventsExplorePage: React.FC = () => {
           <input
             type="text"
             className="form-input"
-            placeholder="Search by event title, topic, or venue location..."
+            placeholder="Search by event title, description, or location..."
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             style={{
@@ -138,41 +261,103 @@ export const EventsExplorePage: React.FC = () => {
         </div>
       </div>
 
-      {/* Categories Filter Chips */}
+      {/* Control Bar: Filter Toggle, Multi-Sort, and Grid/List View Toggle */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: '0.5rem',
-          overflowX: 'auto',
-          paddingBottom: '1rem',
-          marginBottom: '1.5rem',
+          justifyContent: 'space-between',
+          marginBottom: '1rem',
+          flexWrap: 'wrap',
+          gap: '1rem',
         }}
       >
-        <button
-          onClick={() => handleCategorySelect('')}
-          className={`btn btn-sm ${
-            !paramCategory ? 'btn-primary' : 'btn-secondary'
-          }`}
-        >
-          <span>All Categories</span>
-        </button>
-
-        {categories.map((cat) => (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
           <button
-            key={cat.id}
-            onClick={() => handleCategorySelect(cat.id)}
-            className={`btn btn-sm ${
-              paramCategory === cat.id ? 'btn-primary' : 'btn-secondary'
-            }`}
+            type="button"
+            className={`btn btn-sm ${isFilterPanelOpen ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setIsFilterPanelOpen((prev) => !prev)}
           >
-            <Tag size={13} />
-            <span>{cat.name}</span>
+            <SlidersHorizontal size={15} />
+            <span>Advanced Filters</span>
+            {isFilterActive && (
+              <span
+                style={{
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  backgroundColor: '#10b981',
+                  display: 'inline-block',
+                }}
+              />
+            )}
           </button>
-        ))}
+
+          {/* Multi-Sorting Control */}
+          <MultiSortControl
+            sortRules={activeSortRules}
+            onChange={handleSortChange}
+          />
+        </div>
+
+        {/* Right side: Page Size & Grid/List View Toggle */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+            <span style={{ fontSize: '0.825rem', color: 'var(--text-muted)' }}>Show:</span>
+            <select
+              className="filter-select"
+              style={{ padding: '0.35rem 0.6rem', fontSize: '0.825rem' }}
+              value={paramLimit}
+              onChange={(e) => handleLimitChange(Number(e.target.value))}
+            >
+              <option value={6}>6 per page</option>
+              <option value={12}>12 per page</option>
+              <option value={24}>24 per page</option>
+            </select>
+          </div>
+
+          <ViewToggle
+            viewMode={viewMode}
+            onChange={handleViewModeChange}
+          />
+        </div>
       </div>
 
-      {/* Events Grid */}
+      {/* Dynamic Advanced Filter Builder (Replaces Old Category Chips) */}
+      {isFilterPanelOpen && (
+        <FilterBuilder
+          filterGroup={filterDraft}
+          onChange={setFilterDraft}
+          onApply={handleApplyFilters}
+          onReset={handleResetFilters}
+          categories={categories}
+          isApplied={isFilterActive}
+        />
+      )}
+
+      {/* Status Bar */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: '1rem',
+          fontSize: '0.875rem',
+          color: 'var(--text-muted)',
+        }}
+      >
+        <span>
+          Showing <strong>{items.length}</strong> {items.length === 1 ? 'event' : 'events'}
+          {meta.total > 0 && ` of ${meta.total} total`}
+        </span>
+        {meta.currentCursor && (
+          <span style={{ fontSize: '0.8rem', color: 'var(--primary)' }}>
+            Keyset Cursor Active
+          </span>
+        )}
+      </div>
+
+      {/* Events Display: Grid or List */}
       {isLoading ? (
         <div style={{ textAlign: 'center', padding: '4rem' }}>
           <p style={{ color: 'var(--text-muted)' }}>Loading events...</p>
@@ -182,13 +367,29 @@ export const EventsExplorePage: React.FC = () => {
           className="card"
           style={{ textAlign: 'center', padding: '4rem 2rem' }}
         >
-          <Filter size={40} color="#94a3b8" style={{ margin: '0 auto 1rem' }} />
+          <FilterIcon size={40} color="#94a3b8" style={{ margin: '0 auto 1rem' }} />
           <h3 style={{ fontSize: '1.25rem', fontWeight: 600 }}>No Events Found</h3>
           <p style={{ color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-            Try adjusting your search keywords or clearing filters.
+            Try adjusting your search keywords or resetting your advanced filter rules.
           </p>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            style={{ marginTop: '1rem' }}
+            onClick={handleResetFilters}
+          >
+            Reset All Filters
+          </button>
+        </div>
+      ) : viewMode === 'list' ? (
+        /* Compact List View */
+        <div className="event-list-container">
+          {items.map((event) => (
+            <EventListItem key={event.id} event={event} />
+          ))}
         </div>
       ) : (
+        /* Preserved 3-Column Grid View */
         <div className="grid grid-cols-3">
           {items.map((event) => {
             const availableSeats = Math.max(
@@ -327,8 +528,8 @@ export const EventsExplorePage: React.FC = () => {
         </div>
       )}
 
-      {/* Pagination Controls */}
-      {meta.totalPages > 1 && (
+      {/* Keyset Cursor Pagination Navigation */}
+      {(cursorStack.length > 0 || meta.hasNextPage) && (
         <div
           style={{
             display: 'flex',
@@ -339,23 +540,26 @@ export const EventsExplorePage: React.FC = () => {
           }}
         >
           <button
-            onClick={() => handlePageChange(meta.page - 1)}
-            disabled={!meta.hasPrevPage}
+            type="button"
+            onClick={handlePrevPage}
+            disabled={cursorStack.length === 0}
             className="btn btn-secondary btn-sm"
           >
-            Previous
+            ← Previous Page
           </button>
 
           <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-            Page <strong>{meta.page}</strong> of <strong>{meta.totalPages}</strong>
+            Page <strong>{paramPage}</strong>
+            {meta.totalPages ? ` of ${meta.totalPages}` : ''}
           </span>
 
           <button
-            onClick={() => handlePageChange(meta.page + 1)}
-            disabled={!meta.hasNextPage}
+            type="button"
+            onClick={handleNextPage}
+            disabled={!meta.hasNextPage || !meta.nextCursor}
             className="btn btn-secondary btn-sm"
           >
-            Next
+            Next Page →
           </button>
         </div>
       )}

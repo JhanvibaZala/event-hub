@@ -4,6 +4,7 @@ import {
   IsIn,
   IsBoolean,
   IsDateString,
+  IsString,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
@@ -43,4 +44,22 @@ export class EventQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsDateString()
   endDate?: string;
+
+  @ApiPropertyOptional({ description: 'Base64 keyset pagination cursor' })
+  @IsOptional()
+  cursor?: string;
+
+  @ApiPropertyOptional({
+    description: 'Multi-sorting rules (e.g. startDate:ASC,price:DESC or JSON array)',
+  })
+  @IsOptional()
+  sort?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Advanced dynamic multi-filter group in JSON string format with AND/OR logic and rules',
+  })
+  @IsOptional()
+  @IsString()
+  filters?: string;
 }

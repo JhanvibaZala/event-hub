@@ -32,13 +32,54 @@ export interface Event {
   createdAt: string;
 }
 
+export type FilterOperator =
+  | 'equals'
+  | 'contains'
+  | 'gt'
+  | 'gte'
+  | 'lt'
+  | 'lte'
+  | 'between';
+
+export type FilterField =
+  | 'title'
+  | 'location'
+  | 'price'
+  | 'capacity'
+  | 'registeredCount'
+  | 'startDate'
+  | 'endDate'
+  | 'status'
+  | 'categoryId'
+  | 'isOnline';
+
+export interface FilterRule {
+  field: FilterField;
+  operator: FilterOperator;
+  value: any;
+}
+
+export interface FilterGroup {
+  logic?: 'AND' | 'OR';
+  rules?: FilterRule[];
+  groups?: FilterGroup[];
+}
+
+export interface SortRule {
+  field: string;
+  direction: 'ASC' | 'DESC';
+}
+
 export interface PaginationMeta {
   total: number;
-  page: number;
+  page?: number;
   limit: number;
-  totalPages: number;
+  totalPages?: number;
   hasNextPage: boolean;
   hasPrevPage: boolean;
+  nextCursor?: string | null;
+  currentCursor?: string | null;
+  activeSort?: SortRule[];
 }
 
 export interface EventsState {
@@ -48,6 +89,7 @@ export interface EventsState {
   categories: Category[];
   isLoading: boolean;
   error: string | null;
+  viewMode: 'grid' | 'list';
 }
 
 const initialState: EventsState = {
@@ -59,18 +101,26 @@ const initialState: EventsState = {
     totalPages: 1,
     hasNextPage: false,
     hasPrevPage: false,
+    nextCursor: null,
+    currentCursor: null,
+    activeSort: [],
   },
   currentEvent: null,
   categories: [],
   isLoading: false,
   error: null,
+  viewMode: 'grid',
 };
 
 export const fetchEventsThunk = createAsyncThunk(
   'events/fetchEvents',
   async (params: Record<string, any> | undefined, { rejectWithValue }) => {
     try {
-      const data: any = await api.get('/events', { params });
+      const formattedParams = { ...params };
+      if (formattedParams.filters && typeof formattedParams.filters === 'object') {
+        formattedParams.filters = JSON.stringify(formattedParams.filters);
+      }
+      const data: any = await api.get('/events', { params: formattedParams });
       return data;
     } catch (err: any) {
       return rejectWithValue(err.message);
@@ -145,6 +195,9 @@ const eventsSlice = createSlice({
     clearCurrentEvent: (state) => {
       state.currentEvent = null;
     },
+    setViewMode: (state, action) => {
+      state.viewMode = action.payload;
+    },
   },
   extraReducers: (builder) => {
     // Fetch Events
@@ -188,5 +241,5 @@ const eventsSlice = createSlice({
   },
 });
 
-export const { clearCurrentEvent } = eventsSlice.actions;
+export const { clearCurrentEvent, setViewMode } = eventsSlice.actions;
 export default eventsSlice.reducer;
