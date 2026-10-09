@@ -29,6 +29,11 @@ import {
   KeysetPaginatedResult,
 } from '../common/dto/keyset-pagination.dto';
 
+function hasConditionKeys(obj: any): boolean {
+  if (!obj || typeof obj !== 'object') return false;
+  return Reflect.ownKeys(obj).length > 0;
+}
+
 @Injectable()
 export class EventsService {
   constructor(
@@ -94,14 +99,17 @@ export class EventsService {
 
     if (group.rules && Array.isArray(group.rules)) {
       for (const rule of group.rules) {
-        conditions.push(this.buildRuleCondition(rule));
+        const cond = this.buildRuleCondition(rule);
+        if (hasConditionKeys(cond)) {
+          conditions.push(cond);
+        }
       }
     }
 
     if (group.groups && Array.isArray(group.groups)) {
       for (const sub of group.groups) {
         const subCond = this.buildGroupCondition(sub);
-        if (subCond && Object.keys(subCond).length > 0) {
+        if (hasConditionKeys(subCond)) {
           conditions.push(subCond);
         }
       }
@@ -181,7 +189,7 @@ export class EventsService {
 
       if (filterGroup) {
         const filterCond = this.buildGroupCondition(filterGroup);
-        if (filterCond && Object.keys(filterCond).length > 0) {
+        if (hasConditionKeys(filterCond)) {
           andConditions.push(filterCond);
         }
       }

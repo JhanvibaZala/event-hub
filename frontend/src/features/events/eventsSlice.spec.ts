@@ -6,6 +6,7 @@ import eventsReducer, {
   FilterGroup,
   SortRule,
 } from './eventsSlice';
+import { cleanFilterGroup } from './pages/EventsExplorePage';
 
 describe('eventsSlice', () => {
   const mockInitialState: EventsState = {
@@ -168,6 +169,51 @@ describe('eventsSlice', () => {
       };
       const state = eventsReducer(stateWithEvent, clearCurrentEvent());
       expect(state.currentEvent).toBeNull();
+    });
+  });
+
+  describe('cleanFilterGroup helper', () => {
+    it('should clean out empty rules and empty nested groups while preserving valid ones', () => {
+      const dirtyGroup: FilterGroup = {
+        logic: 'AND',
+        rules: [
+          { field: 'title', operator: 'contains', value: '' }, // empty, remove
+          { field: 'categoryId', operator: 'equals', value: '97b245c6-c766-457e-a3d2-d19d22aa3ea2' }, // valid
+        ],
+        groups: [
+          {
+            logic: 'OR',
+            rules: [], // empty group, remove
+            groups: [],
+          },
+          {
+            logic: 'AND',
+            rules: [
+              { field: 'price', operator: 'lte', value: 100 }, // valid
+            ],
+            groups: [],
+          },
+        ],
+      };
+
+      const cleaned = cleanFilterGroup(dirtyGroup);
+      expect(cleaned).not.toBeNull();
+      expect(cleaned?.rules).toHaveLength(1);
+      expect(cleaned?.rules?.[0].field).toBe('categoryId');
+      expect(cleaned?.groups).toHaveLength(1);
+      expect(cleaned?.groups?.[0].rules).toHaveLength(1);
+      expect(cleaned?.groups?.[0].rules?.[0].field).toBe('price');
+    });
+
+    it('should return null when group has no valid rules or sub-groups', () => {
+      const emptyGroup: FilterGroup = {
+        logic: 'AND',
+        rules: [{ field: 'title', operator: 'contains', value: '' }],
+        groups: [{ logic: 'OR', rules: [] }],
+      };
+
+      const cleaned = cleanFilterGroup(emptyGroup);
+      expect(cleaned).toBeNull();
     });
   });
 });

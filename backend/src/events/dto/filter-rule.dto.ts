@@ -85,6 +85,10 @@ export const ALLOWED_OPERATORS_BY_TYPE: Record<string, FilterOperator[]> = {
  * Validates a filter group recursively against allowlists.
  */
 export function validateFilterGroup(group: FilterGroup): void {
+  if (!group || typeof group !== 'object') {
+    throw new BadRequestException('Filter group must be an object');
+  }
+
   const logic = group.logic || 'AND';
   if (logic !== 'AND' && logic !== 'OR') {
     throw new BadRequestException(`Invalid filter logic '${logic}'. Allowed: 'AND', 'OR'`);

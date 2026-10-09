@@ -23,6 +23,41 @@ import {
   SlidersHorizontal,
 } from 'lucide-react';
 
+export function cleanFilterGroup(group: FilterGroup): FilterGroup | null {
+  if (!group || typeof group !== 'object') return null;
+
+  const cleanRules = (group.rules || []).filter((r) => {
+    if (!r || !r.field || !r.operator) return false;
+    if (r.operator === 'between') {
+      return (
+        Array.isArray(r.value) &&
+        r.value.length === 2 &&
+        r.value[0] !== '' &&
+        r.value[0] !== undefined &&
+        r.value[0] !== null &&
+        r.value[1] !== '' &&
+        r.value[1] !== undefined &&
+        r.value[1] !== null
+      );
+    }
+    return r.value !== '' && r.value !== undefined && r.value !== null;
+  });
+
+  const cleanSubGroups = (group.groups || [])
+    .map(cleanFilterGroup)
+    .filter((g): g is FilterGroup => g !== null);
+
+  if (cleanRules.length === 0 && cleanSubGroups.length === 0) {
+    return null;
+  }
+
+  return {
+    logic: group.logic === 'OR' ? 'OR' : 'AND',
+    rules: cleanRules,
+    groups: cleanSubGroups,
+  };
+}
+
 export const EventsExplorePage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const dispatch = useAppDispatch();
@@ -113,19 +148,9 @@ export const EventsExplorePage: React.FC = () => {
   // Filter Apply Handler
   const handleApplyFilters = () => {
     const params = new URLSearchParams(searchParams);
-    const cleanRules = (filterDraft.rules || []).filter(
-      (r) => r.value !== '' && r.value !== undefined && r.value !== null,
-    );
-    const cleanGroups = (filterDraft.groups || []).filter(
-      (g) => g.rules && g.rules.length > 0,
-    );
+    const cleanGroup = cleanFilterGroup(filterDraft);
 
-    if (cleanRules.length > 0 || cleanGroups.length > 0) {
-      const cleanGroup: FilterGroup = {
-        logic: filterDraft.logic || 'AND',
-        ...(cleanRules.length > 0 ? { rules: cleanRules } : {}),
-        ...(cleanGroups.length > 0 ? { groups: cleanGroups } : {}),
-      };
+    if (cleanGroup) {
       params.set('filters', JSON.stringify(cleanGroup));
     } else {
       params.delete('filters');
