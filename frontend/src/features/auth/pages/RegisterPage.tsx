@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../../../app/hooks';
 import { registerThunk } from '../authSlice';
 import { UserPlus, AlertCircle } from 'lucide-react';
+import { PasswordInput } from '../../../components/PasswordInput';
 
 export const RegisterPage: React.FC = () => {
   const dispatch = useAppDispatch();
@@ -76,9 +77,7 @@ export const RegisterPage: React.FC = () => {
 
         <div className="form-group">
           <label className="form-label">Password</label>
-          <input
-            type="password"
-            className="form-input"
+          <PasswordInput
             placeholder="Minimum 6 characters"
             {...register('password', {
               required: 'Password is required',

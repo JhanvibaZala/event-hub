@@ -4,6 +4,7 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../../../app/hooks';
 import { loginThunk } from '../authSlice';
 import { LogIn, AlertCircle } from 'lucide-react';
+import { PasswordInput } from '../../../components/PasswordInput';
 
 export const LoginPage: React.FC = () => {
   const dispatch = useAppDispatch();
@@ -73,9 +74,7 @@ export const LoginPage: React.FC = () => {
               Forgot password?
             </Link>
           </div>
-          <input
-            type="password"
-            className="form-input"
+          <PasswordInput
             placeholder="••••••••"
             {...register('password', { required: 'Password is required' })}
           />

@@ -3,7 +3,7 @@ import { useForm } from 'react-hook-form';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../../../app/hooks';
 import {
-  fetchEventByIdThunk,
+  fetchAdminEventByIdThunk,
   updateEventThunk,
   fetchCategoriesThunk,
 } from '../../events/eventsSlice';
@@ -13,7 +13,7 @@ export const AdminEditEventPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
-  const { currentEvent, categories, isLoading } = useAppSelector(
+  const { currentEvent, categories, isLoading, error } = useAppSelector(
     (state) => state.events,
   );
   const [submitting, setSubmitting] = useState(false);
@@ -24,7 +24,7 @@ export const AdminEditEventPage: React.FC = () => {
   useEffect(() => {
     dispatch(fetchCategoriesThunk());
     if (id) {
-      dispatch(fetchEventByIdThunk(id));
+      dispatch(fetchAdminEventByIdThunk(id));
     }
   }, [id, dispatch]);
 
@@ -70,6 +70,25 @@ export const AdminEditEventPage: React.FC = () => {
       setErrorMsg(result.payload as string);
     }
   };
+
+  if (error && !currentEvent) {
+    return (
+      <div style={{ maxWidth: '700px', margin: '0 auto' }}>
+        <Link
+          to="/admin/events"
+          className="btn btn-secondary btn-sm"
+          style={{ marginBottom: '1.5rem', display: 'inline-flex', gap: '0.4rem' }}
+        >
+          <ArrowLeft size={16} />
+          <span>Back to Events List</span>
+        </Link>
+        <div className="alert alert-danger">
+          <AlertCircle size={18} />
+          <span>{error}</span>
+        </div>
+      </div>
+    );
+  }
 
   if (isLoading && !currentEvent) {
     return (

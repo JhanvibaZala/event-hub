@@ -65,55 +65,39 @@ export const EventsExplorePage: React.FC = () => {
     (state) => state.events,
   );
 
-  // Read URL query params
-  const paramSearch = searchParams.get('search') || '';
-  const paramSort = searchParams.get('sort') || 'startDate:ASC';
-  const paramCursor = searchParams.get('cursor') || '';
-  const paramPage = Number(searchParams.get('page')) || 1;
-  const paramLimit = Number(searchParams.get('limit')) || 6;
-  const urlFiltersStr = searchParams.get('filters') || '';
-
-  // Local search input
-  const [searchInput, setSearchInput] = useState(paramSearch);
+  // Search state initialized from optional simple search param
+  const initialSearch = searchParams.get('search') || '';
+  const [searchInput, setSearchInput] = useState(initialSearch);
   const debouncedSearch = useDebounce(searchInput, 350);
 
-  // Keyset cursor history stack for navigating backwards
+  // Advanced filters state (held in state, NOT serialized as huge JSON in URL)
+  const [filterDraft, setFilterDraft] = useState<FilterGroup>({
+    logic: 'AND',
+    rules: [],
+    groups: [],
+  });
+  const [appliedFilters, setAppliedFilters] = useState<FilterGroup | null>(null);
+
+  // Multi-sort rules state (defaulting to startDate:ASC)
+  const [activeSortRules, setActiveSortRules] = useState<SortRule[]>([
+    { field: 'startDate', direction: 'ASC' },
+  ]);
+
+  // Pagination state (page, limit, cursor, cursor navigation stack)
+  const [page, setPage] = useState<number>(1);
+  const [limit, setLimit] = useState<number>(6);
+  const [cursor, setCursor] = useState<string | null>(null);
   const [cursorStack, setCursorStack] = useState<string[]>([]);
 
   // Show/hide filter builder panel toggle
   const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(true);
 
-  // Parse filters from URL
-  const parsedFilters: FilterGroup = useMemo(() => {
-    if (!urlFiltersStr) return { logic: 'AND', rules: [], groups: [] };
-    try {
-      return JSON.parse(urlFiltersStr);
-    } catch {
-      return { logic: 'AND', rules: [], groups: [] };
-    }
-  }, [urlFiltersStr]);
-
-  // Draft filter group state for builder edits
-  const [filterDraft, setFilterDraft] = useState<FilterGroup>(parsedFilters);
-
-  // Sync draft whenever URL filters change
+  // Fetch categories once on mount
   useEffect(() => {
-    setFilterDraft(parsedFilters);
-  }, [parsedFilters]);
+    dispatch(fetchCategoriesThunk());
+  }, [dispatch]);
 
-  // Parse sort rules from URL
-  const activeSortRules: SortRule[] = useMemo(() => {
-    if (!paramSort) return [{ field: 'startDate', direction: 'ASC' }];
-    return paramSort.split(',').map((seg) => {
-      const [field, dir] = seg.split(':');
-      return {
-        field: field || 'startDate',
-        direction: (dir?.toUpperCase() === 'DESC' ? 'DESC' : 'ASC') as 'ASC' | 'DESC',
-      };
-    });
-  }, [paramSort]);
-
-  // Sync debounced search to URL query param
+  // Sync debounced search to URL query param for lightweight deep-linking
   useEffect(() => {
     const params = new URLSearchParams(searchParams);
     if (debouncedSearch) {
@@ -121,78 +105,78 @@ export const EventsExplorePage: React.FC = () => {
     } else {
       params.delete('search');
     }
+    // Clean up any legacy long query parameters from URL
+    params.delete('filters');
+    params.delete('sort');
     params.delete('cursor');
-    params.set('page', '1');
-    setCursorStack([]);
+    params.delete('page');
+    params.delete('limit');
     setSearchParams(params, { replace: true });
+
+    // Reset pagination when search keyword changes
+    setCursor(null);
+    setPage(1);
+    setCursorStack([]);
   }, [debouncedSearch]);
 
-  // Fetch categories once on mount
-  useEffect(() => {
-    dispatch(fetchCategoriesThunk());
-  }, [dispatch]);
-
-  // Fetch events when query params change (viewMode change will NOT trigger this!)
+  // Fetch events via POST /events/search whenever search, sort, filter, or pagination changes
+  // Note: viewMode change does NOT trigger this effect!
   useEffect(() => {
     dispatch(
       fetchEventsThunk({
-        limit: paramLimit,
-        search: paramSearch || undefined,
-        sort: paramSort || undefined,
-        filters: urlFiltersStr || undefined,
-        cursor: paramCursor || undefined,
+        pagination: {
+          page,
+          limit,
+          cursor: cursor || undefined,
+        },
+        search: debouncedSearch || undefined,
+        sort: activeSortRules,
+        filters: appliedFilters || undefined,
       }),
     );
-  }, [dispatch, paramLimit, paramSearch, paramSort, urlFiltersStr, paramCursor]);
+  }, [dispatch, page, limit, cursor, debouncedSearch, activeSortRules, appliedFilters]);
 
-  // Filter Apply Handler
+  // Filter Apply Handler - Resets pagination
   const handleApplyFilters = () => {
-    const params = new URLSearchParams(searchParams);
     const cleanGroup = cleanFilterGroup(filterDraft);
-
-    if (cleanGroup) {
-      params.set('filters', JSON.stringify(cleanGroup));
-    } else {
-      params.delete('filters');
-    }
-
-    params.delete('cursor');
-    params.set('page', '1');
+    setAppliedFilters(cleanGroup);
+    setCursor(null);
+    setPage(1);
     setCursorStack([]);
-    setSearchParams(params);
   };
 
-  // Filter Reset Handler
+  // Filter Reset Handler - Resets pagination
   const handleResetFilters = () => {
     const empty: FilterGroup = { logic: 'AND', rules: [], groups: [] };
     setFilterDraft(empty);
-    const params = new URLSearchParams(searchParams);
-    params.delete('filters');
-    params.delete('cursor');
-    params.set('page', '1');
+    setAppliedFilters(null);
+    setCursor(null);
+    setPage(1);
     setCursorStack([]);
-    setSearchParams(params);
   };
 
-  // Sort Change Handler
+  // Sort Change Handler - Resets pagination
   const handleSortChange = (newRules: SortRule[]) => {
-    const sortStr = newRules.map((r) => `${r.field}:${r.direction}`).join(',');
-    const params = new URLSearchParams(searchParams);
-    params.set('sort', sortStr);
-    params.delete('cursor');
-    params.set('page', '1');
+    setActiveSortRules(newRules);
+    setCursor(null);
+    setPage(1);
     setCursorStack([]);
-    setSearchParams(params);
+  };
+
+  // Page Size Limit Change - Resets pagination
+  const handleLimitChange = (newLimit: number) => {
+    setLimit(newLimit);
+    setCursor(null);
+    setPage(1);
+    setCursorStack([]);
   };
 
   // Keyset Next Page
   const handleNextPage = () => {
     if (!meta.nextCursor) return;
-    setCursorStack((prev) => [...prev, paramCursor]);
-    const params = new URLSearchParams(searchParams);
-    params.set('cursor', meta.nextCursor);
-    params.set('page', String(paramPage + 1));
-    setSearchParams(params);
+    setCursorStack((prev) => [...prev, cursor || '']);
+    setCursor(meta.nextCursor);
+    setPage((prev) => prev + 1);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -202,26 +186,9 @@ export const EventsExplorePage: React.FC = () => {
     const newStack = [...cursorStack];
     const prevCursor = newStack.pop();
     setCursorStack(newStack);
-
-    const params = new URLSearchParams(searchParams);
-    if (prevCursor) {
-      params.set('cursor', prevCursor);
-    } else {
-      params.delete('cursor');
-    }
-    params.set('page', String(Math.max(1, paramPage - 1)));
-    setSearchParams(params);
+    setCursor(prevCursor || null);
+    setPage((prev) => Math.max(1, prev - 1));
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  // Page Size Limit Change
-  const handleLimitChange = (newLimit: number) => {
-    const params = new URLSearchParams(searchParams);
-    params.set('limit', String(newLimit));
-    params.delete('cursor');
-    params.set('page', '1');
-    setCursorStack([]);
-    setSearchParams(params);
   };
 
   // View Mode Change (Client-side state, no network fetch!)
@@ -229,7 +196,11 @@ export const EventsExplorePage: React.FC = () => {
     dispatch(setViewMode(mode));
   };
 
-  const isFilterActive = Boolean(urlFiltersStr);
+  const isFilterActive = Boolean(
+    appliedFilters &&
+      ((appliedFilters.rules && appliedFilters.rules.length > 0) ||
+        (appliedFilters.groups && appliedFilters.groups.length > 0)),
+  );
 
   return (
     <div>
@@ -332,7 +303,7 @@ export const EventsExplorePage: React.FC = () => {
             <select
               className="filter-select"
               style={{ padding: '0.35rem 0.6rem', fontSize: '0.825rem' }}
-              value={paramLimit}
+              value={limit}
               onChange={(e) => handleLimitChange(Number(e.target.value))}
             >
               <option value={6}>6 per page</option>
@@ -574,7 +545,7 @@ export const EventsExplorePage: React.FC = () => {
           </button>
 
           <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-            Page <strong>{paramPage}</strong>
+            Page <strong>{page}</strong>
             {meta.totalPages ? ` of ${meta.totalPages}` : ''}
           </span>
 

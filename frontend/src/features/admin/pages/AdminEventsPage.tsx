@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../../../app/hooks';
-import { fetchEventsThunk, deleteEventThunk } from '../../events/eventsSlice';
+import { fetchAdminEventsThunk, deleteEventThunk } from '../../events/eventsSlice';
 import { Plus, Edit, Users, Trash2, Calendar, AlertCircle } from 'lucide-react';
 
 export const AdminEventsPage: React.FC = () => {
@@ -9,8 +9,8 @@ export const AdminEventsPage: React.FC = () => {
   const { items, isLoading, error } = useAppSelector((state) => state.events);
 
   useEffect(() => {
-    // Admin query without status limit to see DRAFT and PUBLISHED
-    dispatch(fetchEventsThunk({ limit: 50 }));
+    // Admin query scoped exclusively to authenticated admin's own events
+    dispatch(fetchAdminEventsThunk({ limit: 50 }));
   }, [dispatch]);
 
   const handleDelete = async (id: string, title: string) => {
@@ -58,6 +58,19 @@ export const AdminEventsPage: React.FC = () => {
       {isLoading ? (
         <div style={{ textAlign: 'center', padding: '4rem 0' }}>
           <p style={{ color: 'var(--text-muted)' }}>Loading events...</p>
+        </div>
+      ) : items.length === 0 ? (
+        <div className="card" style={{ textAlign: 'center', padding: '4rem 2rem' }}>
+          <Calendar size={48} color="#94a3b8" style={{ margin: '0 auto 1rem' }} />
+          <h3 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '0.5rem' }}>
+            No Events Found
+          </h3>
+          <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
+            You haven't created any events yet. Click below to publish your first event!
+          </p>
+          <Link to="/admin/events/create" className="btn btn-primary">
+            <Plus size={16} /> Create Event
+          </Link>
         </div>
       ) : (
         <div className="card" style={{ padding: 0, overflowX: 'auto' }}>

@@ -150,13 +150,13 @@ export class RabbitmqService implements OnModuleInit, OnModuleDestroy {
           // Find event details for confirmation notification
           const event = await this.eventModel.findByPk(data.eventId);
           if (event) {
-            // Dispatch notification to user's inbox via direct exchange
+            // 1. Dispatch notification to user's inbox via direct exchange
             await this.publish(
               EXCHANGES.NOTIFICATIONS,
               ROUTING_KEYS.NOTIFICATION_DISPATCH,
               {
                 userId: data.userId,
-                title: 'Registration Confirmed 🎉',
+                title: 'Registration Confirmed',
                 message: `You are confirmed for "${event.title}". Your ticket code is ${data.ticketCode}.`,
                 type: 'REGISTRATION',
                 metadata: {
@@ -166,6 +166,27 @@ export class RabbitmqService implements OnModuleInit, OnModuleDestroy {
                 },
               },
             );
+
+            // 2. Dispatch notification to event owner's inbox (admin)
+            const ownerId = event.createdById || data.ownerId;
+            if (ownerId) {
+              await this.publish(
+                EXCHANGES.NOTIFICATIONS,
+                ROUTING_KEYS.NOTIFICATION_DISPATCH,
+                {
+                  userId: ownerId,
+                  title: 'New Event Registration',
+                  message: `A user has registered for ${event.title}.`,
+                  type: 'REGISTRATION',
+                  metadata: {
+                    eventId: event.id,
+                    registrationId: data.registrationId,
+                    registrantId: data.userId,
+                    ticketCode: data.ticketCode,
+                  },
+                },
+              );
+            }
           }
 
           this.channel?.ack(msg);
@@ -230,6 +251,26 @@ export class RabbitmqService implements OnModuleInit, OnModuleDestroy {
           this.logger.log(
             `[Worker] Dispatching in-app notification to user: ${data.userId}`,
           );
+
+          // Deduplication: prevent duplicate notifications from redeliveries or repeated requests
+          if (data.metadata?.registrationId && data.userId) {
+            const existingNotifs = await this.notificationModel.findAll({
+              where: {
+                userId: data.userId,
+                title: data.title,
+              },
+            });
+            const isDuplicate = existingNotifs.some(
+              (n) => n.metadata?.registrationId === data.metadata.registrationId,
+            );
+            if (isDuplicate) {
+              this.logger.log(
+                `[Worker] Duplicate notification skipped for user ${data.userId}, registration ${data.metadata.registrationId}`,
+              );
+              this.channel?.ack(msg);
+              return;
+            }
+          }
 
           await this.notificationModel.create({
             userId: data.userId,

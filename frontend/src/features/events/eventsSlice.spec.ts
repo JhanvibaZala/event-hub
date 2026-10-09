@@ -1,12 +1,17 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import eventsReducer, {
   setViewMode,
   clearCurrentEvent,
+  fetchEventsThunk,
+  fetchAdminEventsThunk,
+  fetchAdminEventByIdThunk,
+  EventSearchPayload,
   EventsState,
   FilterGroup,
   SortRule,
 } from './eventsSlice';
 import { cleanFilterGroup } from './pages/EventsExplorePage';
+import { api } from '../../services/api';
 
 describe('eventsSlice', () => {
   const mockInitialState: EventsState = {
@@ -214,6 +219,158 @@ describe('eventsSlice', () => {
 
       const cleaned = cleanFilterGroup(emptyGroup);
       expect(cleaned).toBeNull();
+    });
+  });
+
+  describe('POST /events/search contract & fetchEventsThunk', () => {
+    it('should format search request with pagination, sort, and filter payload and send via POST', async () => {
+      const postSpy = vi.spyOn(api, 'post').mockResolvedValueOnce({
+        items: [],
+        meta: {
+          total: 0,
+          page: 1,
+          limit: 6,
+          totalPages: 1,
+          hasNextPage: false,
+          hasPrevPage: false,
+          nextCursor: null,
+          currentCursor: null,
+          activeSort: [],
+        },
+      } as any);
+
+      const searchPayload: EventSearchPayload = {
+        pagination: { page: 1, limit: 6 },
+        sort: [
+          { field: 'price', direction: 'ASC' },
+          { field: 'title', direction: 'ASC' },
+        ],
+        filters: {
+          logic: 'AND',
+          rules: [{ field: 'price', operator: 'lte', value: 100 }],
+          groups: [],
+        },
+        search: 'AI',
+      };
+
+      const dispatch = vi.fn();
+      const thunk = fetchEventsThunk(searchPayload);
+      await thunk(dispatch, () => ({}), undefined);
+
+      expect(postSpy).toHaveBeenCalledWith(
+        '/events/search',
+        expect.objectContaining({
+          search: 'AI',
+          pagination: { page: 1, limit: 6, cursor: undefined },
+          sort: [
+            { field: 'price', direction: 'ASC' },
+            { field: 'title', direction: 'ASC' },
+          ],
+          filters: {
+            logic: 'AND',
+            rules: [{ field: 'price', operator: 'lte', value: 100 }],
+            groups: [],
+          },
+        }),
+      );
+
+      postSpy.mockRestore();
+    });
+
+    it('should normalize string sort and top-level page/limit into structured payload', async () => {
+      const postSpy = vi.spyOn(api, 'post').mockResolvedValueOnce({
+        items: [],
+        meta: {},
+      } as any);
+
+      const legacyParams = {
+        page: 2,
+        limit: 12,
+        sort: 'price:DESC,createdAt:ASC',
+        search: 'Design',
+      };
+
+      const dispatch = vi.fn();
+      const thunk = fetchEventsThunk(legacyParams);
+      await thunk(dispatch, () => ({}), undefined);
+
+      expect(postSpy).toHaveBeenCalledWith(
+        '/events/search',
+        expect.objectContaining({
+          search: 'Design',
+          pagination: { page: 2, limit: 12, cursor: undefined },
+          sort: [
+            { field: 'price', direction: 'DESC' },
+            { field: 'createdAt', direction: 'ASC' },
+          ],
+        }),
+      );
+
+      postSpy.mockRestore();
+    });
+  });
+
+  describe('Admin Hub Data Isolation & Admin Thunks', () => {
+    it('should call POST /admin/events/search with structured payload', async () => {
+      const postSpy = vi.spyOn(api, 'post').mockResolvedValueOnce({
+        items: [{ id: 'admin-ev-1', title: 'Admin Event 1' }],
+        meta: { total: 1, page: 1, limit: 50 },
+      } as any);
+
+      const dispatch = vi.fn();
+      const thunk = fetchAdminEventsThunk({ limit: 50 });
+      await thunk(dispatch, () => ({}), undefined);
+
+      expect(postSpy).toHaveBeenCalledWith(
+        '/admin/events/search',
+        expect.objectContaining({
+          pagination: { limit: 50, page: undefined, cursor: undefined },
+        }),
+      );
+
+      postSpy.mockRestore();
+    });
+
+    it('should call GET /admin/events/:id when fetching admin event by ID', async () => {
+      const getSpy = vi.spyOn(api, 'get').mockResolvedValueOnce({
+        id: 'admin-ev-1',
+        title: 'Admin Event 1',
+      } as any);
+
+      const dispatch = vi.fn();
+      const thunk = fetchAdminEventByIdThunk('admin-ev-1');
+      await thunk(dispatch, () => ({}), undefined);
+
+      expect(getSpy).toHaveBeenCalledWith('/admin/events/admin-ev-1');
+
+      getSpy.mockRestore();
+    });
+
+    it('should populate items and meta on fetchAdminEventsThunk.fulfilled', () => {
+      const payload = {
+        items: [{ id: 'admin-ev-1', title: 'Admin Event 1' } as any],
+        meta: { total: 1, page: 1, limit: 50, hasNextPage: false, hasPrevPage: false },
+      };
+
+      const state = eventsReducer(
+        mockInitialState,
+        fetchAdminEventsThunk.fulfilled(payload, 'req-id', { limit: 50 }),
+      );
+
+      expect(state.isLoading).toBe(false);
+      expect(state.items).toHaveLength(1);
+      expect(state.items[0].id).toBe('admin-ev-1');
+      expect(state.meta.total).toBe(1);
+    });
+
+    it('should set error on fetchAdminEventsThunk.rejected', () => {
+      const state = eventsReducer(
+        mockInitialState,
+        fetchAdminEventsThunk.rejected(null, 'req-id', {}, 'Unauthorized access'),
+      );
+
+      expect(state.isLoading).toBe(false);
+      expect(state.error).toBe('Unauthorized access');
     });
   });
 });

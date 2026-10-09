@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../../../app/hooks';
 import { forgotPasswordThunk, resetPasswordThunk } from '../authSlice';
 import { KeyRound, CheckCircle2, AlertCircle, Copy } from 'lucide-react';
+import { PasswordInput } from '../../../components/PasswordInput';
 
 export const ResetPasswordPage: React.FC = () => {
   const [step, setStep] = useState<'request' | 'reset'>('request');
@@ -166,9 +167,7 @@ export const ResetPasswordPage: React.FC = () => {
 
           <div className="form-group">
             <label className="form-label">New Password</label>
-            <input
-              type="password"
-              className="form-input"
+            <PasswordInput
               placeholder="Minimum 6 characters"
               {...registerReset('newPassword', {
                 required: 'New password is required',

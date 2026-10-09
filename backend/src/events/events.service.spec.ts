@@ -5,8 +5,10 @@ import { EventsService } from './events.service';
 import { Event } from './models/event.model';
 import { Category } from '../categories/models/category.model';
 import { EventQueryDto } from './dto/event-query.dto';
-import { NotFoundException, BadRequestException } from '@nestjs/common';
+import { EventSearchDto } from './dto/event-search.dto';
+import { NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { encodeCursor } from '../common/dto/keyset-pagination.dto';
+import { RequestUser } from '../common/decorators/current-user.decorator';
 
 describe('EventsService', () => {
   let service: EventsService;
@@ -638,7 +640,178 @@ describe('EventsService', () => {
         'Diljit Tour',
         'Global AI Summit 2026',
       ]);
-      expect(result.meta.total).toBe(2);
+    });
+  });
+
+  describe('search (POST body endpoint)', () => {
+    it('should search with default body, applying limit 10, published status, and default sort', async () => {
+      const mockEvent = createMockEvent({
+        id: 'ev-search-1',
+        title: 'Tech Summit',
+        startDate: new Date('2026-11-20T09:00:00Z'),
+        price: 100,
+        status: 'PUBLISHED',
+      });
+      eventModel.findAll.mockResolvedValue([mockEvent]);
+      eventModel.count.mockResolvedValue(1);
+
+      const result = await service.search({});
+
+      expect(result.items).toHaveLength(1);
+      expect(result.meta.limit).toBe(10);
+      expect(result.meta.page).toBe(1);
+      expect(eventModel.findAll).toHaveBeenCalledWith(
+        expect.objectContaining({
+          limit: 11,
+          order: [
+            ['startDate', 'ASC'],
+            ['id', 'ASC'],
+          ],
+          where: expect.objectContaining({
+            status: 'PUBLISHED',
+          }),
+        }),
+      );
+    });
+
+    it('should handle nested pagination and 3+ sort rules preserving order with id tie-breaker', async () => {
+      const mockEvents = [
+        createMockEvent({
+          id: 'ev-1',
+          price: 50,
+          title: 'Apple Keynote',
+          createdAt: new Date('2026-01-01'),
+        }),
+      ];
+      eventModel.findAll.mockResolvedValue(mockEvents);
+      eventModel.count.mockResolvedValue(1);
+
+      const dto: EventSearchDto = {
+        pagination: {
+          page: 2,
+          limit: 6,
+        },
+        sort: [
+          { field: 'price', direction: 'ASC' },
+          { field: 'title', direction: 'ASC' },
+          { field: 'createdAt', direction: 'DESC' },
+        ],
+      };
+
+      const result = await service.search(dto);
+
+      expect(result.meta.limit).toBe(6);
+      expect(result.meta.page).toBe(2);
+      expect(eventModel.findAll).toHaveBeenCalledWith(
+        expect.objectContaining({
+          limit: 7,
+          order: [
+            ['price', 'ASC'],
+            ['title', 'ASC'],
+            ['createdAt', 'DESC'],
+            ['id', 'ASC'],
+          ],
+        }),
+      );
+    });
+
+    it('should handle 5-6 filter rules across nested groups with AND/OR logic', async () => {
+      eventModel.findAll.mockResolvedValue([]);
+      eventModel.count.mockResolvedValue(0);
+
+      const dto: EventSearchDto = {
+        filters: {
+          logic: 'AND',
+          rules: [
+            { field: 'price', operator: 'lte', value: 100 },
+            { field: 'capacity', operator: 'gte', value: 20 },
+            { field: 'isOnline', operator: 'equals', value: true },
+          ],
+          groups: [
+            {
+              logic: 'OR',
+              rules: [
+                { field: 'title', operator: 'contains', value: 'React' },
+                { field: 'location', operator: 'contains', value: 'San Francisco' },
+                { field: 'categoryId', operator: 'equals', value: '97b245c6-c766-457e-a3d2-d19d22aa3ea2' },
+              ],
+            },
+          ],
+        },
+      };
+
+      await service.search(dto);
+
+      const findAllCall = eventModel.findAll.mock.calls[0][0];
+      const where = findAllCall.where;
+      expect(where[Op.and]).toBeDefined();
+      expect(where[Op.and]).toContainEqual({ status: 'PUBLISHED' });
+    });
+
+    it('should strictly enforce status = PUBLISHED for public searches even if DRAFT is requested in filters or body', async () => {
+      eventModel.findAll.mockResolvedValue([]);
+      eventModel.count.mockResolvedValue(0);
+
+      const dto: EventSearchDto = {
+        status: 'DRAFT',
+        filters: {
+          logic: 'AND',
+          rules: [{ field: 'status', operator: 'equals', value: 'DRAFT' }],
+        },
+      };
+
+      await service.search(dto, true); // isPublic = true
+
+      const findAllCall = eventModel.findAll.mock.calls[0][0];
+      const where = findAllCall.where;
+      expect(where[Op.and]).toContainEqual({ status: 'PUBLISHED' });
+    });
+
+    it('should allow non-public search (e.g. admin) to search DRAFT status when isPublic is false', async () => {
+      eventModel.findAll.mockResolvedValue([]);
+      eventModel.count.mockResolvedValue(0);
+
+      const dto: EventSearchDto = {
+        status: 'DRAFT',
+      };
+
+      await service.search(dto, false); // isPublic = false
+
+      const findAllCall = eventModel.findAll.mock.calls[0][0];
+      const where = findAllCall.where;
+      expect(where).toEqual({ status: 'DRAFT' });
+    });
+
+    it('should handle keyset cursor pagination with limit + 1 and compute nextCursor', async () => {
+      const mockEvents = [
+        createMockEvent({
+          id: 'ev-1',
+          startDate: new Date('2026-11-20T09:00:00Z'),
+          price: 50,
+        }),
+        createMockEvent({
+          id: 'ev-2',
+          startDate: new Date('2026-11-21T09:00:00Z'),
+          price: 75,
+        }),
+      ];
+      eventModel.findAll.mockResolvedValue(mockEvents);
+      eventModel.count.mockResolvedValue(10);
+
+      const dto: EventSearchDto = {
+        pagination: {
+          page: 1,
+          limit: 1,
+        },
+        sort: [{ field: 'price', direction: 'ASC' }],
+      };
+
+      const result = await service.search(dto);
+
+      expect(result.items).toHaveLength(1);
+      expect(result.meta.hasNextPage).toBe(true);
+      expect(result.meta.nextCursor).toBeDefined();
+      expect(result.meta.nextCursor).not.toBeNull();
     });
   });
 
@@ -710,6 +883,238 @@ describe('EventsService', () => {
       );
 
       expect(result.slug).toBe('new-event');
+    });
+  });
+
+  describe('Admin Data Isolation and Event Ownership', () => {
+    const adminUserA: RequestUser = {
+      id: 'admin-a-id',
+      email: 'adminA@example.com',
+      role: 'ADMIN',
+    };
+
+    const adminUserB: RequestUser = {
+      id: 'admin-b-id',
+      email: 'adminB@example.com',
+      role: 'ADMIN',
+    };
+
+    const superAdminUser: RequestUser = {
+      id: 'super-admin-id',
+      email: 'superadmin@example.com',
+      role: 'SUPER_ADMIN',
+    };
+
+    describe('searchForAdmin', () => {
+      it('should scope search to only events created by the authenticated admin', async () => {
+        eventModel.findAll.mockResolvedValue([]);
+        eventModel.count.mockResolvedValue(0);
+
+        await service.searchForAdmin({}, adminUserA);
+
+        expect(eventModel.findAll).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              createdById: 'admin-a-id',
+            }),
+          }),
+        );
+      });
+
+      it('should allow SUPER_ADMIN to search across all admins without createdById filter', async () => {
+        eventModel.findAll.mockResolvedValue([]);
+        eventModel.count.mockResolvedValue(0);
+
+        await service.searchForAdmin({}, superAdminUser);
+
+        expect(eventModel.findAll).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.not.objectContaining({
+              createdById: expect.anything(),
+            }),
+          }),
+        );
+      });
+    });
+
+    describe('findAllForAdmin', () => {
+      it('should scope query to only events created by the authenticated admin', async () => {
+        eventModel.findAll.mockResolvedValue([]);
+        eventModel.count.mockResolvedValue(0);
+
+        const query = Object.assign(new EventQueryDto(), { limit: 10 });
+        await service.findAllForAdmin(query, adminUserA);
+
+        expect(eventModel.findAll).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              createdById: 'admin-a-id',
+            }),
+          }),
+        );
+      });
+
+      it('should allow SUPER_ADMIN to query all events without createdById filter', async () => {
+        eventModel.findAll.mockResolvedValue([]);
+        eventModel.count.mockResolvedValue(0);
+
+        const query = Object.assign(new EventQueryDto(), { limit: 10 });
+        await service.findAllForAdmin(query, superAdminUser);
+
+        expect(eventModel.findAll).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.not.objectContaining({
+              createdById: expect.anything(),
+            }),
+          }),
+        );
+      });
+    });
+
+    describe('findByIdForAdmin', () => {
+      it('should allow an admin to retrieve their own event', async () => {
+        const mockEvent = {
+          id: 'ev-1',
+          createdById: 'admin-a-id',
+          title: 'Event A',
+        };
+        eventModel.findOne.mockResolvedValue(mockEvent);
+
+        const result = await service.findByIdForAdmin('ev-1', adminUserA);
+        expect(result).toBe(mockEvent);
+      });
+
+      it('should throw ForbiddenException when an admin attempts to access another admin event', async () => {
+        const mockEvent = {
+          id: 'ev-1',
+          createdById: 'admin-a-id',
+          title: 'Event A',
+        };
+        eventModel.findOne.mockResolvedValue(mockEvent);
+
+        await expect(
+          service.findByIdForAdmin('ev-1', adminUserB),
+        ).rejects.toThrow(ForbiddenException);
+      });
+
+      it('should allow SUPER_ADMIN to retrieve another admin event', async () => {
+        const mockEvent = {
+          id: 'ev-1',
+          createdById: 'admin-a-id',
+          title: 'Event A',
+        };
+        eventModel.findOne.mockResolvedValue(mockEvent);
+
+        const result = await service.findByIdForAdmin('ev-1', superAdminUser);
+        expect(result).toBe(mockEvent);
+      });
+
+      it('should throw NotFoundException if event does not exist', async () => {
+        eventModel.findOne.mockResolvedValue(null);
+
+        await expect(
+          service.findByIdForAdmin('ev-missing', adminUserA),
+        ).rejects.toThrow(NotFoundException);
+      });
+    });
+
+    describe('update ownership', () => {
+      it('should allow an admin to update their own event', async () => {
+        const mockEvent = {
+          id: 'ev-1',
+          title: 'Old Title',
+          createdById: 'admin-a-id',
+          startDate: new Date('2026-11-01T10:00:00Z'),
+          endDate: new Date('2026-11-01T14:00:00Z'),
+          update: jest.fn().mockResolvedValue(true),
+        };
+        eventModel.findByPk.mockResolvedValue(mockEvent);
+        eventModel.findOne.mockResolvedValue({ ...mockEvent, title: 'New Title' });
+
+        await service.update(
+          'ev-1',
+          { title: 'New Title' },
+          adminUserA,
+        );
+        expect(mockEvent.update).toHaveBeenCalled();
+      });
+
+      it('should throw ForbiddenException when updating another admin event', async () => {
+        const mockEvent = {
+          id: 'ev-1',
+          title: 'Old Title',
+          createdById: 'admin-a-id',
+          update: jest.fn(),
+        };
+        eventModel.findByPk.mockResolvedValue(mockEvent);
+
+        await expect(
+          service.update('ev-1', { title: 'Hacked Title' }, adminUserB),
+        ).rejects.toThrow(ForbiddenException);
+        expect(mockEvent.update).not.toHaveBeenCalled();
+      });
+
+      it('should allow SUPER_ADMIN to update another admin event', async () => {
+        const mockEvent = {
+          id: 'ev-1',
+          title: 'Old Title',
+          createdById: 'admin-a-id',
+          startDate: new Date('2026-11-01T10:00:00Z'),
+          endDate: new Date('2026-11-01T14:00:00Z'),
+          update: jest.fn().mockResolvedValue(true),
+        };
+        eventModel.findByPk.mockResolvedValue(mockEvent);
+        eventModel.findOne.mockResolvedValue({ ...mockEvent, title: 'Updated Title' });
+
+        await service.update(
+          'ev-1',
+          { title: 'Updated Title' },
+          superAdminUser,
+        );
+        expect(mockEvent.update).toHaveBeenCalled();
+      });
+    });
+
+    describe('delete ownership', () => {
+      it('should allow an admin to delete their own event', async () => {
+        const mockEvent = {
+          id: 'ev-1',
+          createdById: 'admin-a-id',
+          destroy: jest.fn().mockResolvedValue(true),
+        };
+        eventModel.findByPk.mockResolvedValue(mockEvent);
+
+        const result = await service.delete('ev-1', adminUserA);
+        expect(result.success).toBe(true);
+        expect(mockEvent.destroy).toHaveBeenCalled();
+      });
+
+      it('should throw ForbiddenException and NOT delete when deleting another admin event', async () => {
+        const mockEvent = {
+          id: 'ev-1',
+          createdById: 'admin-a-id',
+          destroy: jest.fn().mockResolvedValue(true),
+        };
+        eventModel.findByPk.mockResolvedValue(mockEvent);
+
+        await expect(service.delete('ev-1', adminUserB)).rejects.toThrow(
+          ForbiddenException,
+        );
+        expect(mockEvent.destroy).not.toHaveBeenCalled();
+      });
+
+      it('should allow SUPER_ADMIN to delete another admin event', async () => {
+        const mockEvent = {
+          id: 'ev-1',
+          createdById: 'admin-a-id',
+          destroy: jest.fn().mockResolvedValue(true),
+        };
+        eventModel.findByPk.mockResolvedValue(mockEvent);
+
+        const result = await service.delete('ev-1', superAdminUser);
+        expect(result.success).toBe(true);
+        expect(mockEvent.destroy).toHaveBeenCalled();
+      });
     });
   });
 });

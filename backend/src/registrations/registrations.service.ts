@@ -4,16 +4,19 @@ import {
   ConflictException,
   BadRequestException,
   ForbiddenException,
+  Optional,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { Sequelize } from 'sequelize-typescript';
-import * as crypto from 'crypto';
+import * as crypto from 'node:crypto';
 import { Registration } from './models/registration.model';
 import { Event } from '../events/models/event.model';
 import { Category } from '../categories/models/category.model';
 import { User } from '../users/models/user.model';
+import { Notification } from '../notifications/models/notification.model';
 import { RabbitmqService, EXCHANGES, ROUTING_KEYS } from '../rabbitmq/rabbitmq.service';
 import { PaginationQueryDto, PaginatedResult } from '../common/dto/pagination-query.dto';
+import { RequestUser } from '../common/decorators/current-user.decorator';
 
 @Injectable()
 export class RegistrationsService {
@@ -24,6 +27,9 @@ export class RegistrationsService {
     private readonly eventModel: typeof Event,
     private readonly sequelize: Sequelize,
     private readonly rabbitmqService: RabbitmqService,
+    @Optional()
+    @InjectModel(Notification)
+    private readonly notificationModel?: typeof Notification,
   ) {}
 
   async register(eventId: string, userId: string): Promise<Registration> {
@@ -106,18 +112,52 @@ export class RegistrationsService {
     });
 
     // 4. Publish asynchronous message to RabbitMQ topic exchange
-    await this.rabbitmqService.publish(
+    const published = await this.rabbitmqService.publish(
       EXCHANGES.EVENTS,
       ROUTING_KEYS.REGISTRATION_CREATED,
       {
         registrationId: registration!.id,
         eventId,
+        ownerId: event.createdById,
+        eventTitle: event.title,
         userId,
         ticketCode: registration!.ticketCode,
         status: registration!.status,
         timestamp: new Date().toISOString(),
       },
     );
+
+    // If real-time message broker is unavailable, persist notifications directly
+    if (!published && this.notificationModel) {
+      await this.notificationModel.create({
+        userId,
+        title: 'Registration Confirmed',
+        message: `You are confirmed for "${event.title}". Your ticket code is ${registration!.ticketCode}.`,
+        type: 'REGISTRATION',
+        isRead: false,
+        metadata: {
+          eventId,
+          registrationId: registration!.id,
+          ticketCode: registration!.ticketCode,
+        },
+      });
+
+      if (event.createdById) {
+        await this.notificationModel.create({
+          userId: event.createdById,
+          title: 'New Event Registration',
+          message: `A user has registered for ${event.title}.`,
+          type: 'REGISTRATION',
+          isRead: false,
+          metadata: {
+            eventId,
+            registrationId: registration!.id,
+            registrantId: userId,
+            ticketCode: registration!.ticketCode,
+          },
+        });
+      }
+    }
 
     return this.registrationModel.findByPk(registration!.id, {
       include: [
@@ -242,7 +282,23 @@ export class RegistrationsService {
   async getEventAttendees(
     eventId: string,
     query: PaginationQueryDto,
+    user?: RequestUser,
   ): Promise<PaginatedResult<Registration>> {
+    const event = await this.eventModel.findByPk(eventId);
+    if (!event) {
+      throw new NotFoundException(`Event with ID ${eventId} not found`);
+    }
+
+    if (user) {
+      const isSuperAdmin =
+        user.role === 'SUPER_ADMIN' || (user.role as any) === 'PLATFORM_ADMIN';
+      if (!isSuperAdmin && event.createdById !== user.id) {
+        throw new ForbiddenException(
+          'You are not authorized to view attendee registrations for this event',
+        );
+      }
+    }
+
     const page = Number(query.page) || 1;
     const limit = Math.min(Number(query.limit) || 10, 100);
     const offset = (page - 1) * limit;

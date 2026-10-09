@@ -78,7 +78,8 @@ export class RegistrationsController {
   async getEventAttendees(
     @Param('eventId') eventId: string,
     @Query() query: PaginationQueryDto,
+    @CurrentUser() user: RequestUser,
   ) {
-    return this.registrationsService.getEventAttendees(eventId, query);
+    return this.registrationsService.getEventAttendees(eventId, query, user);
   }
 }

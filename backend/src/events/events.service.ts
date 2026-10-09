@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { Op, Order } from 'sequelize';
@@ -11,6 +12,8 @@ import { User } from '../users/models/user.model';
 import { CreateEventDto } from './dto/create-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
 import { EventQueryDto } from './dto/event-query.dto';
+import { EventSearchDto } from './dto/event-search.dto';
+import { RequestUser } from '../common/decorators/current-user.decorator';
 import {
   FilterGroup,
   FilterRule,
@@ -120,17 +123,92 @@ export class EventsService {
     return { [logic]: conditions };
   }
 
-  async findAll(
-    query: EventQueryDto,
+  async search(dto: EventSearchDto, isPublic = true): Promise<any> {
+    return this.executeSearch(dto, isPublic);
+  }
+
+  async searchForAdmin(dto: EventSearchDto, user: RequestUser): Promise<any> {
+    const isSuperAdmin =
+      user.role === 'SUPER_ADMIN' || (user.role as any) === 'PLATFORM_ADMIN';
+    const ownerId = isSuperAdmin ? undefined : user.id;
+    return this.executeSearch(dto, false, ownerId);
+  }
+
+  async findAllForAdmin(query: EventQueryDto, user: RequestUser): Promise<any> {
+    const isSuperAdmin =
+      user.role === 'SUPER_ADMIN' || (user.role as any) === 'PLATFORM_ADMIN';
+    const ownerId = isSuperAdmin ? undefined : user.id;
+    const searchDto: EventSearchDto = {
+      search: query.search,
+      pagination: {
+        page: query.page ? Number(query.page) : undefined,
+        limit: query.limit ? Number(query.limit) : undefined,
+        cursor: query.cursor,
+      },
+      page: query.page ? Number(query.page) : undefined,
+      limit: query.limit ? Number(query.limit) : undefined,
+      cursor: query.cursor,
+      sort: query.sort as any,
+      filters: query.filters,
+      categoryId: query.categoryId,
+      status: query.status,
+      isOnline: query.isOnline,
+      startDate: query.startDate,
+      endDate: query.endDate,
+    };
+    return this.executeSearch(
+      searchDto,
+      false,
+      ownerId,
+      query.sortBy || 'startDate',
+      (query.sortOrder as SortDirection) || 'ASC',
+    );
+  }
+
+  async findAll(query: EventQueryDto, isPublic = true): Promise<any> {
+    const searchDto: EventSearchDto = {
+      search: query.search,
+      pagination: {
+        page: query.page ? Number(query.page) : undefined,
+        limit: query.limit ? Number(query.limit) : undefined,
+        cursor: query.cursor,
+      },
+      page: query.page ? Number(query.page) : undefined,
+      limit: query.limit ? Number(query.limit) : undefined,
+      cursor: query.cursor,
+      sort: query.sort as any,
+      filters: query.filters,
+      categoryId: query.categoryId,
+      status: query.status,
+      isOnline: query.isOnline,
+      startDate: query.startDate,
+      endDate: query.endDate,
+    };
+    return this.executeSearch(
+      searchDto,
+      isPublic,
+      undefined,
+      query.sortBy || 'startDate',
+      (query.sortOrder as SortDirection) || 'ASC',
+    );
+  }
+
+  private async executeSearch(
+    dto: EventSearchDto,
     isPublic = true,
+    ownerId?: string,
+    fallbackSortBy = 'startDate',
+    fallbackSortOrder: SortDirection = 'ASC',
   ): Promise<any> {
-    const limit = Math.min(Number(query.limit) || 10, 100);
+    const rawLimit = dto.pagination?.limit ?? dto.limit;
+    const limit = Math.min(Number(rawLimit) || 10, 100);
+    const cursor = dto.pagination?.cursor ?? dto.cursor;
 
     // 1. Parse and validate multi-sorting rules with ID tie-breaker
     const sortRules: SortRule[] = parseSortRules(
-      query.sort,
-      query.sortBy || 'startDate',
-      (query.sortOrder as SortDirection) || 'ASC',
+      dto.sort as any,
+      fallbackSortBy,
+      fallbackSortOrder,
     );
     const sequelizeOrder: Order = sortRules.map((r) => [r.field, r.direction]);
 
@@ -138,8 +216,8 @@ export class EventsService {
     const andConditions: any[] = [];
 
     // Search across title, description, and location
-    if (query.search && query.search.trim()) {
-      const term = `%${query.search.trim()}%`;
+    if (dto.search && dto.search.trim()) {
+      const term = `%${dto.search.trim()}%`;
       andConditions.push({
         [Op.or]: [
           { title: { [Op.iLike]: term } },
@@ -150,41 +228,46 @@ export class EventsService {
     }
 
     // Category filter
-    if (query.categoryId) {
-      andConditions.push({ categoryId: query.categoryId });
+    if (dto.categoryId) {
+      andConditions.push({ categoryId: dto.categoryId });
     }
 
     // Virtual / in-person filter
-    if (query.isOnline !== undefined) {
-      andConditions.push({ isOnline: query.isOnline });
+    if (dto.isOnline !== undefined) {
+      andConditions.push({ isOnline: dto.isOnline });
     }
 
     // Date range filters
-    if (query.startDate) {
-      andConditions.push({ startDate: { [Op.gte]: new Date(query.startDate) } });
+    if (dto.startDate) {
+      andConditions.push({ startDate: { [Op.gte]: new Date(dto.startDate) } });
     }
-    if (query.endDate) {
-      andConditions.push({ endDate: { [Op.lte]: new Date(query.endDate) } });
+    if (dto.endDate) {
+      andConditions.push({ endDate: { [Op.lte]: new Date(dto.endDate) } });
     }
 
-    // Status filter
-    if (query.status) {
-      andConditions.push({ status: query.status });
-    } else if (isPublic) {
+    // Status filter & public visibility enforcement
+    if (isPublic) {
       andConditions.push({ status: 'PUBLISHED' });
+    } else if (dto.status) {
+      andConditions.push({ status: dto.status });
+    }
+
+    // Ownership isolation for admin hub queries (never trust client-supplied owner)
+    if (ownerId) {
+      andConditions.push({ createdById: ownerId });
     }
 
     // Advanced dynamic multi-filter group
-    if (query.filters) {
+    if (dto.filters) {
       let filterGroup: FilterGroup | undefined;
-      if (typeof query.filters === 'string' && query.filters.trim()) {
+      if (typeof dto.filters === 'string' && dto.filters.trim()) {
         try {
-          filterGroup = JSON.parse(query.filters);
+          filterGroup = JSON.parse(dto.filters);
         } catch {
           throw new BadRequestException('Invalid JSON format for filters parameter');
         }
-      } else if (typeof query.filters === 'object' && query.filters !== null) {
-        filterGroup = query.filters;
+      } else if (typeof dto.filters === 'object' && dto.filters !== null) {
+        filterGroup = dto.filters;
       }
 
       if (filterGroup) {
@@ -204,8 +287,8 @@ export class EventsService {
         : { [Op.and]: [...andConditions] };
 
     // 3. Genuine Keyset cursor condition (No OFFSET)
-    if (query.cursor) {
-      const cursorValues = decodeCursor(query.cursor);
+    if (cursor) {
+      const cursorValues = decodeCursor(cursor);
       if (cursorValues.length !== sortRules.length) {
         throw new BadRequestException(
           'Cursor format does not match active sort rules',
@@ -310,7 +393,7 @@ export class EventsService {
       nextCursor = encodeCursor(nextValues);
     }
 
-    const page = Number(query.page) || 1;
+    const page = Number(dto.pagination?.page ?? dto.page) || 1;
     const totalPages = Math.ceil(totalCount / limit) || 1;
 
     return {
@@ -322,8 +405,8 @@ export class EventsService {
         totalPages,
         hasNextPage,
         nextCursor,
-        hasPrevPage: Boolean(query.cursor),
-        currentCursor: query.cursor || null,
+        hasPrevPage: Boolean(cursor),
+        currentCursor: cursor || null,
         activeSort: sortRules,
       },
     };
@@ -357,6 +440,42 @@ export class EventsService {
     return event;
   }
 
+  async findByIdForAdmin(id: string, user: RequestUser): Promise<Event> {
+    const isUuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        id,
+      );
+
+    const event = await this.eventModel.findOne({
+      where: isUuid ? { id } : { slug: id },
+      include: [
+        {
+          model: Category,
+          attributes: ['id', 'name', 'slug', 'icon'],
+        },
+        {
+          model: User,
+          as: 'organizer',
+          attributes: ['id', 'fullName', 'email'],
+        },
+      ],
+    });
+
+    if (!event) {
+      throw new NotFoundException(`Event '${id}' not found`);
+    }
+
+    const isSuperAdmin =
+      user.role === 'SUPER_ADMIN' || (user.role as any) === 'PLATFORM_ADMIN';
+    if (!isSuperAdmin && event.createdById !== user.id) {
+      throw new ForbiddenException(
+        'You are not authorized to access this event',
+      );
+    }
+
+    return event;
+  }
+
   async create(dto: CreateEventDto, userId: string): Promise<Event> {
     // Validate category exists
     const category = await this.categoryModel.findByPk(dto.categoryId);
@@ -384,10 +503,24 @@ export class EventsService {
     });
   }
 
-  async update(id: string, dto: UpdateEventDto): Promise<Event> {
+  async update(
+    id: string,
+    dto: UpdateEventDto,
+    user?: RequestUser,
+  ): Promise<Event> {
     const event = await this.eventModel.findByPk(id);
     if (!event) {
       throw new NotFoundException(`Event with ID ${id} not found`);
+    }
+
+    if (user) {
+      const isSuperAdmin =
+        user.role === 'SUPER_ADMIN' || (user.role as any) === 'PLATFORM_ADMIN';
+      if (!isSuperAdmin && event.createdById !== user.id) {
+        throw new ForbiddenException(
+          'You are not authorized to update this event',
+        );
+      }
     }
 
     if (dto.categoryId) {
@@ -421,10 +554,23 @@ export class EventsService {
     return this.findByIdOrSlug(event.id);
   }
 
-  async delete(id: string): Promise<{ success: boolean; message: string }> {
+  async delete(
+    id: string,
+    user?: RequestUser,
+  ): Promise<{ success: boolean; message: string }> {
     const event = await this.eventModel.findByPk(id);
     if (!event) {
       throw new NotFoundException(`Event with ID ${id} not found`);
+    }
+
+    if (user) {
+      const isSuperAdmin =
+        user.role === 'SUPER_ADMIN' || (user.role as any) === 'PLATFORM_ADMIN';
+      if (!isSuperAdmin && event.createdById !== user.id) {
+        throw new ForbiddenException(
+          'You are not authorized to delete this event',
+        );
+      }
     }
 
     await event.destroy();

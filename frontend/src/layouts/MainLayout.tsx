@@ -108,7 +108,7 @@ export const MainLayout: React.FC = () => {
         }}
       >
         <div className="container">
-          <p>© 2026 EventHub Platform. Built with NestJS, Sequelize, RabbitMQ, and React.</p>
+          <p>© 2026 EventHub Platform</p>
         </div>
       </footer>
     </div>

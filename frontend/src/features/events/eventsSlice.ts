@@ -112,15 +112,96 @@ const initialState: EventsState = {
   viewMode: 'grid',
 };
 
+export interface EventSearchPayload {
+  pagination?: {
+    page?: number;
+    limit?: number;
+    cursor?: string;
+  };
+  sort?: SortRule[];
+  filters?: FilterGroup;
+  search?: string;
+  categoryId?: string;
+  isOnline?: boolean;
+  status?: string;
+  startDate?: string;
+  endDate?: string;
+  page?: number;
+  limit?: number;
+  cursor?: string;
+}
+
+export function buildSearchPayload(
+  params: EventSearchPayload | Record<string, any> | undefined,
+): EventSearchPayload {
+  const payload: EventSearchPayload = {};
+  if (params) {
+    if (params.search) payload.search = params.search;
+
+    payload.pagination = {
+      page:
+        params.pagination?.page ??
+        (params.page !== undefined ? Number(params.page) : undefined),
+      limit:
+        params.pagination?.limit ??
+        (params.limit !== undefined ? Number(params.limit) : undefined),
+      cursor: params.pagination?.cursor ?? params.cursor ?? undefined,
+    };
+
+    if (Array.isArray(params.sort)) {
+      payload.sort = params.sort;
+    } else if (typeof params.sort === 'string' && params.sort) {
+      payload.sort = params.sort.split(',').map((seg: string) => {
+        const [field, dir] = seg.split(':');
+        return {
+          field: field.trim(),
+          direction: (dir && dir.toUpperCase() === 'DESC' ? 'DESC' : 'ASC') as
+            | 'ASC'
+            | 'DESC',
+        };
+      });
+    }
+
+    if (params.filters) {
+      if (typeof params.filters === 'string') {
+        try {
+          payload.filters = JSON.parse(params.filters);
+        } catch {
+          // ignore
+        }
+      } else {
+        payload.filters = params.filters;
+      }
+    }
+
+    if (params.categoryId) payload.categoryId = params.categoryId;
+    if (params.isOnline !== undefined) payload.isOnline = params.isOnline;
+    if (params.status) payload.status = params.status;
+    if (params.startDate) payload.startDate = params.startDate;
+    if (params.endDate) payload.endDate = params.endDate;
+  }
+  return payload;
+}
+
 export const fetchEventsThunk = createAsyncThunk(
   'events/fetchEvents',
-  async (params: Record<string, any> | undefined, { rejectWithValue }) => {
+  async (params: EventSearchPayload | Record<string, any> | undefined, { rejectWithValue }) => {
     try {
-      const formattedParams = { ...params };
-      if (formattedParams.filters && typeof formattedParams.filters === 'object') {
-        formattedParams.filters = JSON.stringify(formattedParams.filters);
-      }
-      const data: any = await api.get('/events', { params: formattedParams });
+      const payload = buildSearchPayload(params);
+      const data: any = await api.post('/events/search', payload);
+      return data;
+    } catch (err: any) {
+      return rejectWithValue(err.message);
+    }
+  },
+);
+
+export const fetchAdminEventsThunk = createAsyncThunk(
+  'events/fetchAdminEvents',
+  async (params: EventSearchPayload | Record<string, any> | undefined, { rejectWithValue }) => {
+    try {
+      const payload = buildSearchPayload(params);
+      const data: any = await api.post('/admin/events/search', payload);
       return data;
     } catch (err: any) {
       return rejectWithValue(err.message);
@@ -133,6 +214,18 @@ export const fetchEventByIdThunk = createAsyncThunk(
   async (idOrSlug: string, { rejectWithValue }) => {
     try {
       const data: any = await api.get(`/events/${idOrSlug}`);
+      return data;
+    } catch (err: any) {
+      return rejectWithValue(err.message);
+    }
+  },
+);
+
+export const fetchAdminEventByIdThunk = createAsyncThunk(
+  'events/fetchAdminEventById',
+  async (id: string, { rejectWithValue }) => {
+    try {
+      const data: any = await api.get(`/admin/events/${id}`);
       return data;
     } catch (err: any) {
       return rejectWithValue(err.message);
@@ -215,6 +308,21 @@ const eventsSlice = createSlice({
       state.error = action.payload as string;
     });
 
+    // Fetch Admin Events
+    builder.addCase(fetchAdminEventsThunk.pending, (state) => {
+      state.isLoading = true;
+      state.error = null;
+    });
+    builder.addCase(fetchAdminEventsThunk.fulfilled, (state, action) => {
+      state.isLoading = false;
+      state.items = action.payload.items;
+      state.meta = action.payload.meta;
+    });
+    builder.addCase(fetchAdminEventsThunk.rejected, (state, action) => {
+      state.isLoading = false;
+      state.error = action.payload as string;
+    });
+
     // Fetch Event By ID
     builder.addCase(fetchEventByIdThunk.pending, (state) => {
       state.isLoading = true;
@@ -225,6 +333,20 @@ const eventsSlice = createSlice({
       state.currentEvent = action.payload;
     });
     builder.addCase(fetchEventByIdThunk.rejected, (state, action) => {
+      state.isLoading = false;
+      state.error = action.payload as string;
+    });
+
+    // Fetch Admin Event By ID
+    builder.addCase(fetchAdminEventByIdThunk.pending, (state) => {
+      state.isLoading = true;
+      state.error = null;
+    });
+    builder.addCase(fetchAdminEventByIdThunk.fulfilled, (state, action) => {
+      state.isLoading = false;
+      state.currentEvent = action.payload;
+    });
+    builder.addCase(fetchAdminEventByIdThunk.rejected, (state, action) => {
       state.isLoading = false;
       state.error = action.payload as string;
     });

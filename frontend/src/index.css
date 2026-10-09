@@ -196,6 +196,26 @@ a {
   margin-top: 0.3rem;
 }
 
+/* Password Input & Toggle */
+.password-input-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.password-toggle-btn {
+  color: #64748b;
+  transition: color 0.15s ease-in-out;
+}
+
+.password-toggle-btn:hover:not(:disabled) {
+  color: var(--text-main);
+}
+
+.password-toggle-btn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
 /* Cards */
 .card {
   background: #ffffff;

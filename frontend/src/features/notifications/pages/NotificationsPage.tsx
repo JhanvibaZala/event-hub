@@ -3,27 +3,37 @@ import { useAppDispatch, useAppSelector } from '../../../app/hooks';
 import {
   fetchNotificationsThunk,
   markAsReadThunk,
+  markAsUnreadThunk,
   markAllAsReadThunk,
+  NotificationFilterOption,
 } from '../notificationsSlice';
-import { Bell, CheckCheck, Check, Calendar, Info } from 'lucide-react';
+import { Bell, CheckCheck, Check, RotateCcw } from 'lucide-react';
 
 export const NotificationsPage: React.FC = () => {
   const dispatch = useAppDispatch();
   const { items, unreadCount, isLoading } = useAppSelector(
     (state) => state.notifications,
   );
-  const [filterUnread, setFilterUnread] = useState(false);
+  const [filterMode, setFilterMode] = useState<NotificationFilterOption>('all');
 
   useEffect(() => {
-    dispatch(fetchNotificationsThunk(filterUnread));
-  }, [dispatch, filterUnread]);
+    dispatch(fetchNotificationsThunk(filterMode));
+  }, [dispatch, filterMode]);
 
   const handleMarkRead = (id: string) => {
     dispatch(markAsReadThunk(id));
   };
 
+  const handleMarkUnread = (id: string) => {
+    dispatch(markAsUnreadThunk(id));
+  };
+
   const handleMarkAll = () => {
     dispatch(markAllAsReadThunk());
+  };
+
+  const handleToggleShowUnread = (checked: boolean) => {
+    setFilterMode(checked ? 'unread' : 'all');
   };
 
   return (
@@ -45,13 +55,66 @@ export const NotificationsPage: React.FC = () => {
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <button
-            onClick={() => setFilterUnread(!filterUnread)}
-            className={`btn btn-sm ${filterUnread ? 'btn-primary' : 'btn-secondary'}`}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          {/* Show unread toggle */}
+          {/* <label
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              cursor: 'pointer',
+              fontSize: '0.875rem',
+              fontWeight: 500,
+              userSelect: 'none',
+            }}
           >
-            <span>{filterUnread ? 'Showing Unread' : 'Filter Unread'}</span>
-          </button>
+            <input
+              type="checkbox"
+              checked={filterMode === 'unread'}
+              onChange={(e) => handleToggleShowUnread(e.target.checked)}
+              style={{ cursor: 'pointer', accentColor: 'var(--primary)' }}
+            />
+            <span>Show unread</span>
+          </label> */}
+
+          {/* Filter Pills */}
+          <div style={{ display: 'flex', gap: '0.35rem', background: '#f1f5f9', padding: '0.25rem', borderRadius: '0.5rem' }}>
+            <button
+              onClick={() => setFilterMode('all')}
+              className={`btn btn-sm ${filterMode === 'all' ? 'btn-primary' : 'btn-secondary'}`}
+              style={{ padding: '0.3rem 0.75rem', fontSize: '0.8rem' }}
+            >
+              All
+            </button>
+            <button
+              onClick={() => setFilterMode('unread')}
+              className={`btn btn-sm ${filterMode === 'unread' ? 'btn-primary' : 'btn-secondary'}`}
+              style={{ padding: '0.3rem 0.75rem', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+            >
+              Unread
+              {unreadCount > 0 && (
+                <span
+                  style={{
+                    background: filterMode === 'unread' ? '#ffffff' : 'var(--primary)',
+                    color: filterMode === 'unread' ? 'var(--primary)' : '#ffffff',
+                    padding: '0.1rem 0.4rem',
+                    borderRadius: '999px',
+                    fontSize: '0.7rem',
+                    fontWeight: 700,
+                  }}
+                >
+                  {unreadCount}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => setFilterMode('read')}
+              className={`btn btn-sm ${filterMode === 'read' ? 'btn-primary' : 'btn-secondary'}`}
+              style={{ padding: '0.3rem 0.75rem', fontSize: '0.8rem' }}
+            >
+              Read
+            </button>
+          </div>
 
           {unreadCount > 0 && (
             <button
@@ -73,9 +136,19 @@ export const NotificationsPage: React.FC = () => {
       ) : items.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: '4rem 2rem' }}>
           <Bell size={48} color="#94a3b8" style={{ margin: '0 auto 1rem' }} />
-          <h3 style={{ fontSize: '1.25rem', fontWeight: 700 }}>No Notifications</h3>
+          <h3 style={{ fontSize: '1.25rem', fontWeight: 700 }}>
+            {filterMode === 'unread'
+              ? 'No Unread Notifications'
+              : filterMode === 'read'
+              ? 'No Read Notifications'
+              : 'No Notifications'}
+          </h3>
           <p style={{ color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-            You're all caught up! Booking updates and alerts will appear here.
+            {filterMode === 'unread'
+              ? "You're all caught up! There are no unread notifications right now."
+              : filterMode === 'read'
+              ? 'You have not read any notifications yet.'
+              : 'Booking updates and alerts will appear here.'}
           </p>
         </div>
       ) : (
@@ -116,15 +189,27 @@ export const NotificationsPage: React.FC = () => {
                 </span>
               </div>
 
-              {!notif.isRead && (
-                <button
-                  onClick={() => handleMarkRead(notif.id)}
-                  className="btn btn-secondary btn-sm"
-                  title="Mark as read"
-                >
-                  <Check size={14} />
-                </button>
-              )}
+              <div style={{ display: 'flex', gap: '0.4rem' }}>
+                {!notif.isRead ? (
+                  <button
+                    onClick={() => handleMarkRead(notif.id)}
+                    className="btn btn-secondary btn-sm"
+                    title="Mark as read"
+                  >
+                    <Check size={14} />
+                    <span style={{ fontSize: '0.75rem' }}>Read</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleMarkUnread(notif.id)}
+                    className="btn btn-secondary btn-sm"
+                    title="Mark as unread"
+                  >
+                    <RotateCcw size={14} />
+                    <span style={{ fontSize: '0.75rem' }}>Unread</span>
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </div>
